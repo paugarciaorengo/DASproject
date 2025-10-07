@@ -1,0 +1,16 @@
+# R / RStudio
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+
+# Archivos locales
+.Rapp.history
+.Rprofile
+.Renviron
+
+# Temporales / salidas
+.DS_Store
+*.utf8.md
+*.knit.md
+*.log
