@@ -9,6 +9,7 @@
 INPUT_CSV <- "../data/processed/accidentes_madrid_con_weather.csv"
 OUT1_PNG  <- "../data/processed/fig_accidentes_por_dia_semana_base.png"
 OUT2_PNG  <- "../data/processed/fig_accidentes_holiday_vs_nonholiday.png"
+OUT3_PNG <- "../data/processed/fig_accidentes_media_festivo_vs_nofestivo.png"
 TZ_LOCAL  <- "Europe/Madrid"
 COUNTRY   <- "ES"
 
@@ -42,12 +43,28 @@ parse_try_dt <- function(x, tz = "UTC") {
 fecha <- parse_try(fecha_txt)
 if (all(is.na(fecha))) stop("No se pudo parsear la columna time.")
 
-# ---------- Day of week en INGLÉS, orden Mon..Sun ----------
-wd <- as.POSIXlt(fecha)$wday
-map_en <- c("Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday")
-day_en <- map_en[wd + 1]
-lvl_en <- c("Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday")
-day_en <- factor(day_en, levels = lvl_en, ordered = TRUE)
+# ---------- Day of week ----------
+# accidentes por fecha
+daily <- as.data.frame(table(fecha_date))
+names(daily) <- c("fecha", "accidents")
+daily$fecha <- as.Date(daily$fecha)
+
+wd <- as.POSIXlt(daily$fecha)$wday 
+map_es <- c("domingo","lunes","martes","miércoles","jueves","viernes","sábado")
+day_es <- map_es[wd + 1]
+lvl_es <- c("lunes","martes","miércoles","jueves","viernes","sábado","domingo")
+day_es <- factor(day_es, levels = lvl_es, ordered = TRUE)
+fecha_date <- as.Date(fecha, tz = TZ_LOCAL)
+daily$day <- factor(map_es[wd + 1], levels = lvl_es, ordered = TRUE)
+
+# --- Para cada día-de-semana: total y nº de días existentes en el periodo
+sum_by <- aggregate(accidents ~ day, data = daily, sum)       # total accidentes en lunes, martes, ...
+n_by   <- aggregate(fecha ~ day, data = daily, function(x) length(unique(x)))  # nº de lunes, martes, ...
+names(n_by)[2] <- "n_dias"
+
+# --- Media = total / nº de días
+stats <- merge(sum_by, n_by, by = "day", all = TRUE)
+stats$mean_acc <- stats$accidents / stats$n_dias
 
 # ---------- Tabla de frecuencias ----------
 tab <- table(day_en[!is.na(day_en)])        
@@ -61,18 +78,17 @@ cat("Accidentes por día de la semana:\n")
 print(tab)
 
 # ---------- Gráfica 1: Accidents by day of the week ----------
-p1 <- ggplot(tab_df, aes(x = day, y = accidents)) +
+p1 <- ggplot(stats, aes(x = day, y = mean_acc)) +
   geom_col(fill = "grey70", color = "grey30") +
-  geom_text(aes(label = accidents), vjust = -0.4, size = 3.5) +
+  geom_text(aes(label = sprintf("%.2f", mean_acc)), vjust = -0.4, size = 3.5) +
   scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
-  labs(title = "Crashes by day of the week (2019–2022)",
-       x = "Day of the week", y = "Number of crashes") +
+  labs(title = "Media de accidentes por día de la semana (2019–2023)",
+       x = "Día de la semana", y = "Accidentes por día de la semana (media)") +
   theme_minimal(base_size = 12) +
   theme(
     plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
     panel.grid.minor = element_blank()
   )
-dir.create(dirname(OUT1_PNG), recursive = TRUE, showWarnings = FALSE)
 ggsave(OUT1_PNG, p1, width = 9, height = 5.5, dpi = 120)
 message("Gráfica 1 guardada en: ", OUT1_PNG)
 
@@ -104,29 +120,89 @@ is_holiday <- fecha_date %in% hols_days
 holiday_lbl <- factor(ifelse(is_holiday, "Holiday (ES)", "Non-holiday"),
                       levels = c("Non-holiday","Holiday (ES)"))
 
-# ---------- Comparativa por día: Holiday vs Non-holiday ----------
-comp_df <- data.frame(day = day_en, holiday = holiday_lbl)
-comp_df <- comp_df[!is.na(comp_df$day), ]
-comp_tab <- as.data.frame(table(comp_df$day, comp_df$holiday))
-names(comp_tab) <- c("day", "holiday", "accidents")
-comp_tab$day <- factor(comp_tab$day, levels = lvl_en, ordered = TRUE)
+# ---------- Comparativa por día: Festivo vs No festivo (MEDIA) ----------
 
+# (partimos de 'daily' ya creado: accidentes por fecha)
+# daily: data.frame(fecha, accidents)
+# añade día de semana (es) y etiqueta festivo
+wd_daily <- as.POSIXlt(daily$fecha)$wday
+map_es  <- c("domingo","lunes","martes","miércoles","jueves","viernes","sábado")
+lvl_es  <- c("lunes","martes","miércoles","jueves","viernes","sábado","domingo")
+daily$day <- factor(map_es[wd_daily + 1], levels = lvl_es, ordered = TRUE)
+
+daily$holiday <- factor(
+  ifelse(daily$fecha %in% hols_days, "Festivo (ES)", "No festivo"),
+  levels = c("No festivo","Festivo (ES)")
+)
+
+# MEDIA diaria por (día-de-semana, festivo)
+mean_by <- aggregate(accidents ~ day + holiday, data = daily, FUN = mean, na.rm = TRUE)
+names(mean_by)[names(mean_by)=="accidents"] <- "mean_acc"
+
+# nº de días en cada celda
+n_by <- aggregate(fecha ~ day + holiday, data = daily, function(x) length(unique(x)))
+names(n_by)[names(n_by)=="fecha"] <- "n_dias"
+
+comp_mean <- merge(mean_by, n_by, by = c("day","holiday"), all = TRUE)
+comp_mean <- comp_mean[order(comp_mean$day, comp_mean$holiday), ]
+
+# gráfica: media (no totales)
 pd <- position_dodge(width = 0.8)
-p2 <- ggplot(comp_tab, aes(x = day, y = accidents, fill = holiday)) +
+p2 <- ggplot(comp_mean, aes(x = day, y = mean_acc, fill = holiday)) +
   geom_col(position = pd, color = "grey30") +
-  geom_text(aes(label = accidents), position = position_dodge(width = 0.8),
-            vjust = -0.35, size = 3.3) +
+  geom_text(aes(label = sprintf("%.2f", mean_acc)), position = pd,
+            vjust = -0.35, size = 3.3, na.rm = TRUE) +
   scale_y_continuous(expand = expansion(mult = c(0, 0.10))) +
   scale_fill_manual(values = c("#9ecae1", "#de2d26")) +
-  labs(title = "Crashes by day — Holiday vs. Non-holiday (2019–2022)",
-       x = "Day of the week", y = "Number of crashes", fill = "") +
+  labs(
+    title    = "Media de accidentes diarios — Festivo vs. No festivo (2019–2023)",
+    subtitle = "Para cada día de la semana: total de accidentes / nº de días de ese tipo (festivo/no festivo)",
+    x = "Día de la semana", y = "Media de accidentes diarios", fill = ""
+  ) +
   theme_minimal(base_size = 12) +
   theme(
     plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
     panel.grid.minor = element_blank()
   )
+
 ggsave(OUT2_PNG, p2, width = 9, height = 5.5, dpi = 120)
-message("Gráfica 2 guardada en: ", OUT2_PNG)
+message("Gráfica 2 (media) guardada en: ", OUT2_PNG)
+
+# gráfica3: festivo / no festivo (sin usar día de la semana)
+daily$holiday <- factor(
+  ifelse(daily$fecha %in% hols_days, "Festivo (ES)", "No festivo"),
+  levels = c("No festivo","Festivo (ES)")
+)
+
+# Media diaria por condición (festivo vs no festivo)
+mean_h <- aggregate(accidents ~ holiday, data = daily, FUN = mean, na.rm = TRUE)
+names(mean_h)[2] <- "mean_acc"
+
+# (opcional) nº de días en cada grupo, por si quieres mostrarlo
+n_h <- aggregate(fecha ~ holiday, data = daily, function(x) length(unique(x)))
+names(n_h)[2] <- "n_dias"
+
+mean_h <- merge(mean_h, n_h, by = "holiday", all = TRUE)
+
+# --- Gráfica 3: dos barras (media de accidentes diarios)
+p3 <- ggplot(mean_h, aes(x = holiday, y = mean_acc, fill = holiday)) +
+  geom_col(color = "grey30", width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = sprintf("%.2f", mean_acc)), vjust = -0.35, size = 3.6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.10))) +
+  scale_fill_manual(values = c("#9ecae1", "#de2d26")) +
+  labs(
+    title    = "Media de accidentes — Festivo vs. No festivo (2019–2023)",
+    subtitle = "Total de accidentes por condición / nº de días de esa condición en el período",
+    x = "", y = "Media de accidentes"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title  = element_text(face = "bold", size = 16, hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(OUT3_PNG, p3, width = 7.5, height = 5, dpi = 120)
+message("Gráfica 3 guardada en: ", OUT3_PNG)
 
 # ---------- Resumen por consola ----------
 totales <- aggregate(accidents ~ holiday, comp_tab, sum)
