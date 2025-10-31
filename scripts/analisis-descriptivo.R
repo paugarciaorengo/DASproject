@@ -64,8 +64,11 @@ missing_summary <- accidents_clean_data %>%
 print(missing_summary)
 
 
-#===============================================================================
+# Valores únicos por columna categórica
+sapply(accidents_clean_data[, sapply(accidents_clean_data, is.character)], function(x) length(unique(x)))
 
+
+#===============================================================================
 
 # Resumen general
 str(accidents_clean_data)
@@ -333,7 +336,6 @@ ggplot(accidentes_por_anio, aes(x = factor(anio), y = total_accidentes)) +
 
 # ------- Accidentes en el mapa
 
-
 accidents_clean_data_filtered <- accidents_clean_data %>%
   filter(!is.na(coordenada_x_utm) & !is.na(coordenada_y_utm)) %>%
   mutate(
@@ -347,16 +349,12 @@ accidents_clean_data_filtered <- accidents_clean_data %>%
     coordenada_y_utm >= 4465000 & coordenada_y_utm <= 4485000
   )
 
+# Convertir tus datos de accidentes a sf y al mismo CRS
+accidentes_sf <- st_as_sf(accidents_clean_data_filtered,
+                          coords = c("coordenada_x_utm", "coordenada_y_utm"),
+                          crs = 25830)   # UTM zona 30N
 
-
-# Convertir coordenadas a sf (sistema espacial)
-datos_sf <- st_as_sf(accidents_clean_data_filtered,
-                     coords = c("coordenada_x_utm", "coordenada_y_utm"),
-                     crs = 25830)
-
-ggplot(accidentes_sf) + 
-  geom_sf(alpha = 0.4, color = "red") + 
-  labs(title = "Distribución espacial de los accidentes en Madrid")
+accidentes_sf <- st_transform(accidentes_sf, crs = 4326)
 
 #-------- Mapa Interactivo
 
@@ -365,7 +363,6 @@ distritos <- st_read("data/raw/distritos/distritos.shp")
 
 # Comprobar la proyección del shapefile
 st_crs(distritos)
-
 distritos_wgs84 <- st_transform(distritos, crs = 4326)
 
 # Crear paleta de colores para los distritos
@@ -395,15 +392,6 @@ leaflet(distritos_wgs84) %>%
   )
 
 
-
-# Convertir tus datos de accidentes a sf y al mismo CRS
-accidentes_sf <- st_as_sf(accidents_clean_data_filtered,
-                          coords = c("coordenada_x_utm", "coordenada_y_utm"),
-                          crs = 25830)   # UTM zona 30N
-
-accidentes_sf <- st_transform(accidentes_sf, crs = 4326)
-
-
 # Mapa final con distritos + accidentes
 leaflet() %>%
   addTiles() %>%
@@ -428,6 +416,18 @@ leaflet() %>%
             values = distritos_wgs84$NOMBRE,
             title = "Distritos de Madrid",
             opacity = 1)
+
+
+
+#Mapa de calor 
+
+ggplot(accidents_clean_data_filtered, aes(x = coordenada_x_utm, y = coordenada_y_utm)) +
+  stat_density_2d(aes(fill = ..level..), geom = "polygon", alpha = 0.5) +
+  scale_fill_gradient(low = "yellow", high = "red") +
+  labs(title = "Mapa de calor de accidentes en Madrid",
+       x = "Coordenada X", y = "Coordenada Y") +
+  theme_minimal()
+
 
 
 # ------------------------------------------------------------------------------
@@ -487,118 +487,3 @@ corrplot(cor_matrix, method = "color")
 3️⃣# Análisis bivariante (relaciones entre clima y accidentes)
 4️⃣# Análisis temporal y espacial
 5️⃣# Conclusiones y visualizaciones clave
-
-
-library(sf)
-library(tidyverse)
-library(plotly)
-
-
-# Convertir UTM a lat/long
-
-accidents_clean_data_filtered <- accidents_clean_data %>%
-  filter(!is.na(coordenada_x_utm) & !is.na(coordenada_y_utm)) %>%
-  mutate(
-    coordenada_x_utm = as.numeric(coordenada_x_utm) / 1000,  # <-- corregimos la escala
-    coordenada_y_utm = as.numeric(coordenada_y_utm) / 1000
-  )%>%
-  # Filtrar solo coordenadas válidas para Madrid en UTM
-  # Madrid está aproximadamente en: X: 400-450, Y: 4460-4490 (UTM zona 30N)
-  filter(
-    coordenada_x_utm >= 430000 & coordenada_x_utm <= 450000,
-    coordenada_y_utm >= 4465000 & coordenada_y_utm <= 4485000
-  )
-
-accidentes_geo <- st_as_sf(accidents_clean_data_filtered,
-                          coords = c("coordenada_x_utm", "coordenada_y_utm"),
-                          crs = 25830)   # UTM zona 30N
-
-accidentes_geo <- st_transform(accidentes_sf, crs = 4326)
-
-
-
-# Extraer coordenadas
-coords <- st_coordinates(accidentes_geo)
-accidentes_geo <- accidentes_geo %>%
-  mutate(long = coords[,1],
-         lat = coords[,2]) %>%
-  st_drop_geometry()
-
-# Extraer año
-accidentes_geo <- accidentes_geo %>%
-  mutate(year = lubridate::year(lubridate::ymd_hm(time)))
-
-
-cat("Total de accidentes:", nrow(accidentes_geo), "\n")
-cat("Años disponibles:\n")
-print(table(accidentes_geo$year))
-
-library(tidyverse)
-library(sf)
-library(lubridate)
-library(plotly)
-library(ggthemes)
-library(maps)
-
-# 4. AGREGAR DATOS PARA ANIMACIÓN
-# ========================================
-# Un punto por accidente único (agrupando personas involucradas)
-accidentes_animacion <- accidentes_geo %>%
-  group_by(localizacion, long, lat, year, distrito, tipo_accidente) %>%
-  summarise(n_personas = n(), .groups = "drop")
-
-accidentes_animacion
-
-# 5. OBTENER MAPA BASE
-# ========================================
-mapa_espana <- map_data("world", region = "Spain")
-
-
-
-# Preparar datos
-accidentes_animacion <- accidentes_geo %>%
-  group_by(long, lat, year, distrito, tipo_accidente) %>%
-  summarise(n_personas = n(), .groups = "drop")
-
-# Obtener mapa
-#mapa_espana <- map_data("world", region = "Spain")
-mapa_espana <- map_data("world", region = "Spain") %>%
-  filter(
-    long >= -4.0 & long <= -3.4,
-    lat >= 40.3 & lat <= 40.6
-  )
-
-
-distritos_df <- distritos_wgs84 %>%
-  st_as_sf() %>%
-  st_cast("POLYGON") %>%
-  st_coordinates() %>%
-  as.data.frame() %>%
-  rename(long = X, lat = Y) %>%
-  mutate(group = L2)  # L2 es el identificador del polígono
-
-
-# Crear mapa animado
-mapa_animado <- distritos_df %>%
-  ggplot() +
-  geom_polygon(aes(x = long, y = lat, group = group),
-               fill = "grey20",
-               color = "white",
-               size = 0.01) +
-  geom_point(data = accidentes_animacion,
-             aes(x = long,
-                 y = lat,
-                 frame = year,
-                 size = n_personas,
-                 color = distrito),
-             alpha = 0.7) +
-  labs(title = "Accidentes de Tráfico en Madrid\n2019-2023",
-       caption = "Datos: Ayuntamiento de Madrid") +
-  theme_map() +
-  scale_size_continuous(guide = FALSE, range = c(1, 8)) +
-  theme(plot.title = element_text(size = 14, hjust = 0.5))
-
-# Animar
-ggplotly(mapa_animado) %>% 
-  animation_slider(currentvalue = list(prefix = "Año ", font = list(color = "orange")))
-
