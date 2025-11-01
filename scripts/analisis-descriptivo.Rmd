@@ -1,6 +1,6 @@
 ---
 title: "Análisis de Accidentes de Tráfico en Madrid (2019-2023)"
-author: "Tu Nombre"
+author: "Pau Garcia Orengo, Vanessa Machordom Torres, Ditmar Estrada Bernuy"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -14,6 +14,7 @@ output:
     toc: true
     number_sections: true
 ---
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(
   echo = TRUE,
@@ -28,6 +29,7 @@ knitr::opts_chunk$set(
 # Configuración del Entorno
 
 ## Instalación de Paquetes
+
 ```{r instalacion, eval=FALSE}
 # Ejecutar solo si los paquetes no están instalados
 install.packages("corrplot")
@@ -37,6 +39,7 @@ install.packages(c("sf", "dplyr", "ggplot2", "scales"))
 ```
 
 ## Carga de Librerías
+
 ```{r librerias}
 # Manipulación y visualización de datos
 library(dplyr)
@@ -59,6 +62,7 @@ library(factoextra)
 # Carga y Preparación de Datos
 
 ## Importación del Dataset
+
 ```{r carga-datos}
 # Cargar el archivo CSV con datos de accidentes y meteorología
 accidents_clean_data <- read.csv("../data/processed/accidentes_madrid_con_weather.csv", 
@@ -67,6 +71,7 @@ accidents_clean_data <- read.csv("../data/processed/accidentes_madrid_con_weathe
 ```
 
 ## Exploración Inicial del Dataset
+
 ```{r exploracion-inicial}
 # Visualizar nombres de columnas
 names(accidents_clean_data)
@@ -81,6 +86,7 @@ unique(accidents_clean_data$lesividad)
 ## Limpieza de Datos
 
 ### Normalización de Valores Faltantes
+
 ```{r limpieza-na}
 # Estandarizar valores faltantes y limpiar espacios en blanco
 accidents_clean_data <- accidents_clean_data %>%
@@ -97,6 +103,7 @@ accidents_clean_data <- accidents_clean_data %>%
 ```
 
 ### Análisis de Valores Faltantes
+
 ```{r analisis-na}
 # Calcular porcentaje de valores faltantes por columna
 missing_summary <- accidents_clean_data %>%
@@ -115,6 +122,7 @@ sapply(accidents_clean_data[, sapply(accidents_clean_data, is.character)],
 ## Ingeniería de Características
 
 ### Variables Temporales
+
 ```{r variables-temporales}
 # Extraer componentes de fecha y tiempo
 accidents_clean_data$fecha <- as.Date(accidents_clean_data$time)
@@ -133,6 +141,7 @@ accidents_clean_data$estacion <- case_when(
 ```
 
 ### Franjas Horarias y Períodos
+
 ```{r franja-horaria}
 # Clasificar accidentes por franja horaria
 accidents_clean_data$franja_horaria <- case_when(
@@ -149,6 +158,7 @@ accidents_clean_data$es_fin_de_semana <- ifelse(
 ```
 
 ### Variables Meteorológicas Derivadas
+
 ```{r variables-meteorologicas}
 # Categorizar temperatura en rangos
 accidents_clean_data$categoria_temp <- case_when(
@@ -163,6 +173,7 @@ accidents_clean_data$hubo_lluvia <- ifelse(accidents_clean_data$wx_precipitation
 ```
 
 ### Clasificación de Gravedad de Lesiones
+
 ```{r gravedad-binaria}
 # Crear variable de gravedad simplificada
 accidents_clean_data <- accidents_clean_data %>%
@@ -182,6 +193,7 @@ accidents_clean_data <- accidents_clean_data %>%
 ```
 
 ## Resumen del Dataset Procesado
+
 ```{r resumen-final}
 # Estructura general del dataset
 str(accidents_clean_data)
@@ -202,6 +214,7 @@ colnames(accidents_clean_data)
 # Análisis General del Conjunto de Datos
 
 ## Distribución por Tipo de Accidente
+
 ```{r tipo-accidente}
 accidents_clean_data %>%
   filter(!is.na(tipo_accidente)) %>%
@@ -224,6 +237,7 @@ accidents_clean_data %>%
 ```
 
 ## Distribución por Distrito
+
 ```{r accidentes-distrito}
 # Calcular total de accidentes por distrito
 accidentes_por_distrito <- accidents_clean_data %>%
@@ -248,6 +262,7 @@ ggplot(accidentes_por_distrito,
 ```
 
 ## Distribución por Tipo de Vehículo
+
 ```{r tipo-vehiculo}
 # Calcular accidentes por tipo de vehículo
 accidentes_por_tipo_vehiculo <- accidents_clean_data %>%
@@ -270,6 +285,7 @@ ggplot(accidentes_por_tipo_vehiculo,
 ```
 
 ## Gravedad según Tipo de Accidente
+
 ```{r gravedad-tipo-accidente}
 # Filtrar datos sin NA en tipo de accidente
 accidents_clean_data_sin_na <- accidents_clean_data %>%
@@ -290,6 +306,7 @@ ggplot(accidents_clean_data_sin_na, aes(x = tipo_accidente, fill = gravedad_bina
 ## Distribución Temporal Básica
 
 ### Accidentes por Día de la Semana
+
 ```{r dia-semana}
 ggplot(accidents_clean_data, aes(x = dia_semana)) +
   geom_bar(fill = "steelblue") +
@@ -302,6 +319,7 @@ ggplot(accidents_clean_data, aes(x = dia_semana)) +
 ```
 
 ### Accidentes por Mes
+
 ```{r accidentes-mes}
 ggplot(accidents_clean_data, aes(x = mes)) +
   geom_bar(fill = "forestgreen") +
@@ -317,6 +335,7 @@ ggplot(accidents_clean_data, aes(x = mes)) +
 # Análisis Meteorológico
 
 ## Accidentes por Condición Meteorológica (Totales)
+
 ```{r accidentes-clima-total}
 # Contar accidentes por estado meteorológico
 accidentes_clima <- accidents_clean_data %>%
@@ -342,6 +361,7 @@ ggplot(accidentes_clima, aes(x = reorder(estado_meteorol_gico, n), y = n)) +
 ```
 
 ## Media de Accidentes Diarios por Condición Meteorológica
+
 ```{r accidentes-clima-media}
 # Calcular media de accidentes por día según condición meteorológica
 accidentes_clima <- accidents_clean_data %>%
@@ -371,6 +391,7 @@ ggplot(accidentes_clima, aes(x = reorder(estado_meteorol_gico, media), y = media
 ```
 
 ## Accidentes según Categoría de Temperatura
+
 ```{r accidentes-temperatura}
 # Filtrar datos con temperatura categorizada
 accidents_clean_data_temp <- accidents_clean_data %>%
@@ -388,6 +409,7 @@ ggplot(accidents_clean_data_temp, aes(x = categoria_temp)) +
 ```
 
 ## Accidentes con y sin Lluvia
+
 ```{r accidentes-lluvia}
 # Filtrar datos con información de lluvia
 accidents_clean_data_lluvia <- accidents_clean_data %>%
@@ -407,6 +429,7 @@ ggplot(accidents_clean_data_lluvia, aes(x = hubo_lluvia)) +
 # Análisis Temporal
 
 ## Distribución por Año
+
 ```{r accidentes-anio}
 # Calcular accidentes por año
 accidentes_por_anio <- accidents_clean_data %>%
@@ -426,6 +449,7 @@ ggplot(accidentes_por_anio, aes(x = factor(anio), y = total_accidentes)) +
 ```
 
 ## Distribución por Hora del Día
+
 ```{r distribucion-hora}
 ggplot(accidents_clean_data, aes(x = hora)) +
   geom_bar(fill = "#DE2D27") +
@@ -437,9 +461,240 @@ ggplot(accidents_clean_data, aes(x = hora)) +
   theme_minimal()
 ```
 
+# Análisis Temporal Avanzado
+
+## Configuración para Análisis de Días Festivos
+
+```{r config-festivos}
+# Parámetros para análisis temporal con festivos
+TZ_LOCAL <- "Europe/Madrid"
+COUNTRY <- "ES"
+
+# Asegurar que tenemos la librería necesaria
+if (!require("jsonlite")) install.packages("jsonlite")
+library(jsonlite)
+```
+
+## Media de Accidentes por Día de la Semana
+
+```{r accidentes-dia-semana-media}
+# Convertir fecha a formato Date
+fecha_date <- as.Date(accidents_clean_data$time, tz = TZ_LOCAL)
+
+# Agregar accidentes por fecha
+daily <- as.data.frame(table(fecha_date))
+names(daily) <- c("fecha", "accidents")
+daily$fecha <- as.Date(daily$fecha)
+
+# Obtener día de la semana
+wd <- as.POSIXlt(daily$fecha)$wday
+map_es <- c("domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado")
+lvl_es <- c("lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo")
+daily$day <- factor(map_es[wd + 1], levels = lvl_es, ordered = TRUE)
+
+# Calcular estadísticas por día de la semana
+sum_by <- aggregate(accidents ~ day, data = daily, sum)
+n_by <- aggregate(fecha ~ day, data = daily, function(x) length(unique(x)))
+names(n_by)[2] <- "n_dias"
+
+# Calcular media: total de accidentes / número de días de ese tipo
+stats <- merge(sum_by, n_by, by = "day", all = TRUE)
+stats$mean_acc <- stats$accidents / stats$n_dias
+
+# Mostrar estadísticas
+cat("Estadísticas por día de la semana:\n")
+print(stats)
+```
+
+```{r plot-dia-semana-media, fig.cap="Media de accidentes por día de la semana"}
+# Visualización de media de accidentes por día
+ggplot(stats, aes(x = day, y = mean_acc)) +
+  geom_col(fill = "grey70", color = "grey30") +
+  geom_text(aes(label = sprintf("%.2f", mean_acc)), vjust = -0.4, size = 3.5) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
+  labs(
+    title = "Media de accidentes por día de la semana (2019–2023)",
+    x = "Día de la semana",
+    y = "Accidentes por día de la semana (media)"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+```
+
+## Obtención de Días Festivos
+
+```{r obtencion-festivos}
+# Función para obtener festivos desde API Nager.Date
+get_holidays <- function(year, country = COUNTRY) {
+  url <- paste0("https://date.nager.at/api/v3/PublicHolidays/", year, "/", country)
+  json <- try(jsonlite::fromJSON(url), silent = TRUE)
+  
+  if (inherits(json, "try-error") || length(json) == 0) {
+    warning("No se pudieron obtener festivos para ", year)
+    return(data.frame(date = as.Date(character()), stringsAsFactors = FALSE))
+  }
+  
+  data.frame(
+    date = as.Date(json$date),
+    localName = json$localName,
+    name = json$name,
+    fixed = json$fixed,
+    global = json$global,
+    stringsAsFactors = FALSE
+  )
+}
+
+# Obtener años únicos del dataset
+years <- sort(unique(format(as.Date(accidents_clean_data$time, tz = TZ_LOCAL), "%Y")))
+
+# Obtener festivos para todos los años
+hols_list <- lapply(years, get_holidays)
+hols <- if (length(hols_list)) do.call(rbind, hols_list) else data.frame(date = as.Date(character()))
+hols_days <- unique(hols$date)
+
+# Mostrar festivos obtenidos
+cat("Total de días festivos identificados:", length(hols_days), "\n")
+cat("\nPrimeros festivos:\n")
+print(head(hols[, c("date", "localName")], 10))
+```
+
+## Clasificación de Días Festivos vs No Festivos
+
+```{r clasificacion-festivos}
+# Agregar columna de festivo al dataset diario
+daily$holiday <- factor(
+  ifelse(daily$fecha %in% hols_days, "Festivo (ES)", "No festivo"),
+  levels = c("No festivo", "Festivo (ES)")
+)
+
+# Resumen de días festivos vs no festivos
+cat("\nDistribución de días en el período:\n")
+print(table(daily$holiday))
+```
+
+## Comparativa: Festivo vs No Festivo por Día de la Semana
+
+```{r comparativa-festivo-dia-semana}
+# Calcular media diaria por día de la semana y condición de festivo
+mean_by <- aggregate(accidents ~ day + holiday, data = daily, FUN = mean, na.rm = TRUE)
+names(mean_by)[names(mean_by) == "accidents"] <- "mean_acc"
+
+# Contar número de días en cada combinación
+n_by <- aggregate(fecha ~ day + holiday, data = daily, function(x) length(unique(x)))
+names(n_by)[names(n_by) == "fecha"] <- "n_dias"
+
+# Combinar estadísticas
+comp_mean <- merge(mean_by, n_by, by = c("day", "holiday"), all = TRUE)
+comp_mean <- comp_mean[order(comp_mean$day, comp_mean$holiday), ]
+
+# Mostrar tabla comparativa
+cat("\nMedia de accidentes por día de la semana y condición de festivo:\n")
+print(comp_mean)
+```
+
+```{r plot-festivo-dia-semana, fig.cap="Comparativa de accidentes: festivo vs no festivo por día de la semana"}
+# Visualización comparativa por día de la semana
+pd <- position_dodge(width = 0.8)
+
+ggplot(comp_mean, aes(x = day, y = mean_acc, fill = holiday)) +
+  geom_col(position = pd, color = "grey30") +
+  geom_text(
+    aes(label = sprintf("%.2f", mean_acc)),
+    position = pd,
+    vjust = -0.35,
+    size = 3.3,
+    na.rm = TRUE
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.10))) +
+  scale_fill_manual(values = c("#9ecae1", "#de2d26")) +
+  labs(
+    title = "Media de accidentes diarios — Festivo vs. No festivo (2019–2023)",
+    subtitle = "Para cada día: total de accidentes / número de días de ese tipo",
+    x = "Día de la semana",
+    y = "Media de accidentes diarios",
+    fill = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+```
+
+## Comparativa General: Festivo vs No Festivo
+
+```{r comparativa-festivo-general}
+# Calcular media diaria por condición (festivo vs no festivo)
+mean_h <- aggregate(accidents ~ holiday, data = daily, FUN = mean, na.rm = TRUE)
+names(mean_h)[2] <- "mean_acc"
+
+# Contar número de días en cada grupo
+n_h <- aggregate(fecha ~ holiday, data = daily, function(x) length(unique(x)))
+names(n_h)[2] <- "n_dias"
+
+# Combinar estadísticas
+mean_h <- merge(mean_h, n_h, by = "holiday", all = TRUE)
+
+# Mostrar estadísticas
+cat("\nEstadísticas generales festivo vs no festivo:\n")
+print(mean_h)
+```
+
+```{r plot-festivo-general, fig.cap="Comparativa general: media de accidentes en días festivos vs no festivos"}
+# Visualización comparativa general
+ggplot(mean_h, aes(x = holiday, y = mean_acc, fill = holiday)) +
+  geom_col(color = "grey30", width = 0.7, show.legend = FALSE) +
+  geom_text(aes(label = sprintf("%.2f", mean_acc)), vjust = -0.35, size = 3.6) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.10))) +
+  scale_fill_manual(values = c("#9ecae1", "#de2d26")) +
+  labs(
+    title = "Media de accidentes — Festivo vs. No festivo (2019–2023)",
+    subtitle = "Total de accidentes por condición / número de días de esa condición",
+    x = "",
+    y = "Media de accidentes"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", size = 16, hjust = 0.5),
+    panel.grid.minor = element_blank()
+  )
+```
+
+## Resumen Estadístico: Impacto de Días Festivos
+
+```{r resumen-festivos}
+# Calcular proporción de accidentes en festivos
+totales <- aggregate(accidents ~ holiday, data = daily, FUN = sum)
+prop_holiday <- with(totales, accidents[holiday == "Festivo (ES)"] / sum(accidents))
+
+# Mostrar resumen
+cat("\n=== RESUMEN DE ANÁLISIS TEMPORAL ===\n\n")
+
+cat("Total de accidentes por condición:\n")
+print(totales)
+
+cat("\n📊 Estadísticas clave:\n")
+cat(sprintf("- Proporción de accidentes en días festivos: %.2f%%\n", 100 * prop_holiday))
+cat(sprintf("- Media en días festivos: %.2f accidentes/día\n", 
+            mean_h$mean_acc[mean_h$holiday == "Festivo (ES)"]))
+cat(sprintf("- Media en días no festivos: %.2f accidentes/día\n", 
+            mean_h$mean_acc[mean_h$holiday == "No festivo"]))
+
+# Calcular diferencia porcentual
+diff_pct <- ((mean_h$mean_acc[mean_h$holiday == "Festivo (ES)"] / 
+              mean_h$mean_acc[mean_h$holiday == "No festivo"]) - 1) * 100
+cat(sprintf("- Diferencia: %.2f%% %s accidentes en festivos\n", 
+            abs(diff_pct), 
+            ifelse(diff_pct > 0, "más", "menos")))
+```
+
 # Análisis Espacial
 
 ## Preparación de Datos Geoespaciales
+
 ```{r preparacion-espacial}
 # Filtrar y normalizar coordenadas UTM
 accidents_clean_data_filtered <- accidents_clean_data %>%
@@ -464,6 +719,7 @@ accidentes_sf <- st_transform(accidentes_sf, crs = 4326)
 ```
 
 ## Mapa de Calor de Densidad de Accidentes
+
 ```{r mapa-calor}
 # Cargar shapefile de los distritos de Madrid
 madrid_sf <- st_read("../data/raw/distritos/DISTRITOS.shp")
@@ -503,6 +759,7 @@ ggplot() +
 ```
 
 ## Mapa de Burbujas por Distrito
+
 ```{r mapa-burbujas}
 # Normalizar nombres de distrito para evitar problemas de coincidencia
 madrid_sf$NOMBRE <- toupper(trimws(madrid_sf$NOMBRE))
@@ -563,6 +820,7 @@ ggplot() +
 # Análisis de Factores Humanos
 
 ## Distribución por Rango de Edad y Sexo
+
 ```{r edad-sexo}
 ggplot(accidents_clean_data, aes(x = rango_edad, fill = sexo)) + 
   geom_bar(position = "dodge") +
@@ -583,6 +841,7 @@ ggplot(accidents_clean_data, aes(x = rango_edad, fill = sexo)) +
 # Análisis Multivariado
 
 ## Matriz de Correlaciones entre Variables Meteorológicas
+
 ```{r correlaciones}
 # Seleccionar únicamente variables meteorológicas numéricas
 numericas <- accidents_clean_data[, c("wx_temperature", "wx_wind_speed", "wx_precipitation")]
@@ -597,6 +856,7 @@ corrplot(cor_matrix, method = "color")
 # Análisis Avanzado: Clustering Geográfico
 
 ## Identificación de Zonas de Alta Concentración de Accidentes
+
 ```{r clustering-geografico}
 # Preparar dataset con solo coordenadas espaciales
 datos_geo <- accidents_clean_data_filtered[, c("coordenada_x_utm", "coordenada_y_utm")]
@@ -619,24 +879,24 @@ fviz_cluster(km_result, data = datos_geo,
 
 ## Resumen de Hallazgos Clave
 
-- **Análisis temporal:** Se identificaron patrones claros en la distribución de accidentes por hora, día de la semana y mes.
-- **Factores meteorológicos:** Las condiciones climáticas muestran relación con la frecuencia de accidentes.
-- **Análisis espacial:** Ciertos distritos presentan mayor concentración de accidentes.
-- **Clustering geográfico:** Se identificaron 5 zonas principales con características similares de siniestralidad.
+-   **Análisis temporal:** Se identificaron patrones claros en la distribución de accidentes por hora, día de la semana y mes.
+-   **Factores meteorológicos:** Las condiciones climáticas muestran relación con la frecuencia de accidentes.
+-   **Análisis espacial:** Ciertos distritos presentan mayor concentración de accidentes.
+-   **Clustering geográfico:** Se identificaron 5 zonas principales con características similares de siniestralidad.
 
 ## Ruta Metodológica Seguida
 
-1. **Carga y limpieza de datos:** Tratamiento de valores faltantes y normalización.
-2. **Análisis univariante:** Exploración de cada variable por separado.
-3. **Análisis bivariante:** Relaciones entre clima, tiempo y accidentes.
-4. **Análisis temporal y espacial:** Identificación de patrones espacio-temporales.
-5. **Análisis multivariado:** Correlaciones y clustering.
+1.  **Carga y limpieza de datos:** Tratamiento de valores faltantes y normalización.
+2.  **Análisis univariante:** Exploración de cada variable por separado.
+3.  **Análisis bivariante:** Relaciones entre clima, tiempo y accidentes.
+4.  **Análisis temporal y espacial:** Identificación de patrones espacio-temporales.
+5.  **Análisis multivariado:** Correlaciones y clustering.
 
----
+------------------------------------------------------------------------
 
 **Información del Análisis**
 
-- **Fuente de datos:** Portal de Datos Abiertos del Ayuntamiento de Madrid
-- **Período analizado:** 2019-2023
-- **Herramientas:** R `r getRversion()`
-- **Fecha de generación del informe:** `r Sys.Date()`
+-   **Fuente de datos:** [Kaggle](https://www.kaggle.com/datasets/jairoordezpacheco/accidentes-de-trfico-de-madrid-espaa-2019-a-2023)
+-   **Período analizado:** 2019-2023
+-   **Herramientas:** R `r getRversion()`
+-   **Fecha de generación del informe:** `r Sys.Date()`
