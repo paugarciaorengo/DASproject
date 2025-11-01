@@ -2,6 +2,7 @@
 install.packages("corrplot")
 install.packages("sf")
 install.packages("leaflet")
+install.packages(c("sf", "dplyr", "ggplot2", "scales"))
 
 library(dplyr)
 library(ggplot2)
@@ -13,12 +14,21 @@ library(leaflet)
 
 library(stringr)
 library(tidyr)
+# Instalar paquetes si no los tienes
+library(scales)
+library(cluster)
+library(factoextra)
+
 
 
 # Cargar el archivo CSV con cabeceras
 accidents_clean_data <- read.csv("data/processed/accidentes_madrid_con_weather.csv", 
                          header = TRUE, 
                          sep = ",")
+
+names(accidents_clean_data)
+str(accidents_clean_data)
+unique(accidents_clean_data$lesividad)
 
 # ------------------------------------------------------------------------------
 # 1 ANÁLISIS GENERAL DEL CONJUNTO DE DATOS
@@ -38,7 +48,7 @@ accidents_clean_data <- read.csv("data/processed/accidentes_madrid_con_weather.c
 #   Gráfico de barras de distrito (accidentes por distrito).
 
 
-#================IDENTIFICANDO NA=========================================
+#================IDENTIFICANDO NA===============================================
 
 # ✅ 1️⃣ Crear una copia del dataset original
 accidents_clean_data <- accidents_clean_data %>%
@@ -54,6 +64,7 @@ accidents_clean_data <- accidents_clean_data %>%
                 )))
 
 
+
 # Calcular porcentaje de valores faltantes por columna
 missing_summary <- accidents_clean_data %>%
   summarise(across(everything(), ~mean(is.na(.)) * 100)) %>%
@@ -63,10 +74,64 @@ missing_summary <- accidents_clean_data %>%
 # Ver los resultados
 print(missing_summary)
 
-
 # Valores únicos por columna categórica
 sapply(accidents_clean_data[, sapply(accidents_clean_data, is.character)], function(x) length(unique(x)))
 
+
+# CREAR ATRIBUTOS DERIVADOS ====================================================
+
+
+# 1. Extraer hora, día de la semana, mes, estación
+
+accidents_clean_data$fecha <- as.Date(accidents_clean_data$time)
+accidents_clean_data$anio <- year(accidents_clean_data$fecha)
+accidents_clean_data$hora <- hour(accidents_clean_data$time)
+accidents_clean_data$dia_semana <- wday(accidents_clean_data$time, label = TRUE, abbr = FALSE)
+accidents_clean_data$mes <- month(accidents_clean_data$time, label = TRUE)
+accidents_clean_data$estacion <- case_when(
+  accidents_clean_data$mes %in% c("diciembre", "enero", "febrero") ~ "Invierno",
+  accidents_clean_data$mes %in% c("marzo", "abril", "mayo") ~ "Primavera",
+  accidents_clean_data$mes %in% c("junio", "julio", "agosto") ~ "Verano",
+  accidents_clean_data$mes %in% c("septiembre", "octubre", "noviembre") ~ "Otoño"
+)
+
+# 2. Crear franja horaria
+accidents_clean_data$franja_horaria <- case_when(
+  accidents_clean_data$hora >= 6 & accidents_clean_data$hora < 12 ~ "Mañana",
+  accidents_clean_data$hora >= 12 & accidents_clean_data$hora < 18 ~ "Tarde",
+  accidents_clean_data$hora >= 18 & accidents_clean_data$hora < 24 ~ "Noche",
+  TRUE ~ "Madrugada"
+)
+
+# 3. Fin de semana vs entre semana
+accidents_clean_data$es_fin_de_semana <- ifelse(accidents_clean_data$dia_semana %in% c("sábado", "domingo"), "Sí", "No")
+
+# 4. Categorizar temperatura
+accidents_clean_data$categoria_temp <- case_when(
+  accidents_clean_data$wx_temperature < 5 ~ "Frío (< 5°C)",
+  accidents_clean_data$wx_temperature >= 5 & accidents_clean_data$wx_temperature < 15 ~ "Templado (5-15°C)",
+  accidents_clean_data$wx_temperature >= 15 & accidents_clean_data$wx_temperature < 25 ~ "Cálido (15-25°C)",
+  accidents_clean_data$wx_temperature >= 25 ~ "Caluroso (> 25°C)"
+)
+
+# 5. ¿Hubo precipitación?
+accidents_clean_data$hubo_lluvia <- ifelse(accidents_clean_data$wx_precipitation > 0, "Sí", "No")
+
+# 6. Gravedad binaria de lesividad
+accidents_clean_data <- accidents_clean_data %>%
+  mutate(gravedad_binaria = case_when(
+    # LEVES
+    grepl("sólo en el lugar|Sin asistencia|ambulatoria", lesividad, ignore.case = TRUE) ~ "Leve",
+    
+    # GRAVES
+    grepl("Ingreso|urgencias|centro de salud|mutua|Fallecido", lesividad, ignore.case = TRUE) ~ "Grave",
+    
+    # DESCONOCIDO
+    lesividad == "Se desconoce" | is.na(lesividad) ~ "Desconocido",
+    
+    # Por si acaso queda algo
+    TRUE ~ "Otro"
+  ))
 
 #===============================================================================
 
@@ -142,75 +207,33 @@ ggplot(accidentes_por_tipo_vehiculo, aes(x = reorder(tipo_vehiculo, total_accide
 
 # ------- Accidentes por el consumo de alcohol
 
-accidentes_alcohol <- accidents_clean_data %>%
-  filter(!is.na(positiva_alcohol)) %>%     # eliminar NA
-  group_by(positiva_alcohol) %>%
-  summarise(total_accidentes = n()) %>%
-  arrange(desc(total_accidentes))
+accidents_clean_data_sin_na = accidents_clean_data%>%
+  filter(!is.na(tipo_accidente))
 
-#cantidad
-ggplot(accidentes_alcohol, aes(x = factor(positiva_alcohol, labels = c("Negativo", "Positivo")), 
-                               y = total_accidentes)) +
-  geom_col(fill = "steelblue") +
-  geom_text(aes(label = total_accidentes), vjust = -0.5) +
-  labs(
-    title = "Accidentes según resultado de alcohol (Madrid 2019–2023)",
-    x = "Resultado de alcohol",
-    y = "Número de accidentes"
-  ) +
-  theme_minimal()
-
-accidentes_alcohol <- accidentes_alcohol %>%
-  mutate(porcentaje = total_accidentes / sum(total_accidentes) * 100)
-
-#porcentaje
-ggplot(accidentes_alcohol, aes(x = factor(positiva_alcohol, labels = c("Negativo", "Positivo")), 
-                               y = porcentaje)) +
-  geom_col(fill = "steelblue") +
-  geom_text(aes(label = paste0(round(porcentaje, 1), "%")), vjust = -0.5) +
-  labs(
-    title = "Porcentaje de accidentes según resultado de alcohol (Madrid 2019–2023)",
-    x = "Resultado de alcohol",
-    y = "Porcentaje de accidentes"
-  ) +
+ggplot(accidents_clean_data_sin_na, aes(x = tipo_accidente, fill = gravedad_binaria)) +
+  geom_bar(position = "fill") +
+  coord_flip() +
+  labs(title = "Gravedad según tipo de accidente",
+       x = "Tipo de accidente", y = "Proporción") +
   theme_minimal()
 
 
-# ------- Accidentes por el uso de drogas
+# --Accidentes por día de la semana
 
-accidentes_droga <- accidents_clean_data %>%
-  filter(!is.na(positiva_droga)) %>%       # eliminar NA
-  group_by(positiva_droga) %>%
-  summarise(total_accidentes = n()) %>%
-  arrange(desc(total_accidentes))
-
-#cantidad
-ggplot(accidentes_droga, aes(x = factor(positiva_droga, labels = c("Negativo", "Positivo")), 
-                             y = total_accidentes)) +
-  geom_col(fill = "darkgreen") +
-  geom_text(aes(label = total_accidentes), vjust = -0.5) +
-  labs(
-    title = "Accidentes según resultado de drogas (Madrid 2019–2023)",
-    x = "Resultado de drogas",
-    y = "Número de accidentes"
-  ) +
+ggplot(accidents_clean_data, aes(x = dia_semana)) +
+  geom_bar(fill = "steelblue") +
+  labs(title = "Accidentes por día de la semana",
+       x = "Día", y = "Número de accidentes") +
   theme_minimal()
 
-accidentes_droga <- accidentes_droga %>%
-  mutate(porcentaje = total_accidentes / sum(total_accidentes) * 100)
+#Accidentes por mes/estación
 
-#porcentaje
-ggplot(accidentes_droga, aes(x = factor(positiva_droga, labels = c("Negativo", "Positivo")), 
-                             y = porcentaje)) +
-  geom_col(fill = "darkgreen") +
-  geom_text(aes(label = paste0(round(porcentaje, 1), "%")), vjust = -0.5) +
-  labs(
-    title = "Porcentaje de accidentes según resultado de drogas",
-    x = "Resultado de drogas",
-    y = "Porcentaje de accidentes"
-  ) +
-  theme_minimal()
-
+ggplot(accidents_clean_data, aes(x = mes)) +
+  geom_bar(fill = "forestgreen") +
+  labs(title = "Accidentes por mes",
+       x = "Mes", y = "Número de accidentes") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 
 # ------------------------------------------------------------------------------
@@ -279,6 +302,29 @@ ggplot(accidentes_clima, aes(x = reorder(estado_meteorol_gico, media), y = media
     axis.text.y = element_text(size = 10)
   )
 
+accidents_clean_data_temp = accidents_clean_data %>%
+  filter(!is.na(categoria_temp))
+
+#Accidentes vs Temperatura
+ggplot(accidents_clean_data_temp, aes(x = categoria_temp)) +
+  geom_bar(fill = "orange") +
+  labs(title = "Accidentes según categoría de temperatura",
+       x = "Temperatura", y = "Número de accidentes") +
+  theme_minimal()
+
+
+#--Accidentes con/sin lluvia
+
+accidents_clean_data_lluvia = accidents_clean_data %>%
+              filter(!is.na(hubo_lluvia))
+
+ggplot(accidents_clean_data_lluvia, aes(x = hubo_lluvia)) +
+  geom_bar(fill = "dodgerblue") +
+  labs(title = "Accidentes según presencia de lluvia",
+       x = "¿Llovió?", y = "Número de accidentes") +
+  theme_minimal()
+
+
 # ------------------------------------------------------------------------------
 # 3 ANÁLISIS TEMPORAL
 # ------------------------------------------------------------------------------
@@ -295,10 +341,7 @@ ggplot(accidentes_clima, aes(x = reorder(estado_meteorol_gico, media), y = media
 
 # ------- Accidentes por mes
 
-accidents_clean_data$fecha <- as.Date(accidents_clean_data$time)
-accidents_clean_data$anio <- year(accidents_clean_data$fecha)
-accidents_clean_data$mes <- month(accidents_clean_data$fecha, label = TRUE)
-accidents_clean_data$hora <- hour(accidents_clean_data$time)
+
 
 ggplot(accidents_clean_data, aes(x = mes)) + 
   geom_bar(fill = "orange") + 
@@ -318,6 +361,16 @@ ggplot(accidentes_por_anio, aes(x = factor(anio), y = total_accidentes)) +
     y = "Número de accidentes"
   ) +
   theme_minimal()
+
+
+# Grafico por Hora
+
+ggplot(accidents_clean_data, aes(x = hora )) +
+  geom_bar(fill = "#DE2D27") +
+  labs(title = "Distribución de accidentes por hora del día",
+       x = "Hora", y = "Número de accidentes") +
+  theme_minimal()
+
 
 # ------------------------------------------------------------------------------
 # 4 ANÁLISIS ESPACIAL
@@ -356,77 +409,107 @@ accidentes_sf <- st_as_sf(accidents_clean_data_filtered,
 
 accidentes_sf <- st_transform(accidentes_sf, crs = 4326)
 
-#-------- Mapa Interactivo
+#Mapa de calor
 
-# Cargar el shapefile de los distritos
-distritos <- st_read("data/raw/distritos/distritos.shp")
+# 1. Leer shapefile de distritos
+madrid_sf <- st_read("data/raw/distritos/DISTRITOS.shp")
 
-# Comprobar la proyección del shapefile
-st_crs(distritos)
-distritos_wgs84 <- st_transform(distritos, crs = 4326)
+# 2. Asegurarse de que los datos de accidentes estén en el mismo CRS (proyección)
+#    Suponiendo que el shapefile está en EPSG:25830 (UTM zona 30N, típico de Madrid)
+#    y que tus coordenadas están en ese mismo sistema (coordenada_x_utm, coordenada_y_utm)
+#    si no, puedes transformar así:
+# madrid_sf <- st_transform(madrid_sf, crs = 25830)
 
-# Crear paleta de colores para los distritos
-n_distritos <- length(unique(distritos_wgs84$NOMBRE))
-pal <- colorFactor(
-  palette = rainbow(n_distritos),  # genera colores suficientes para todos
-  domain = distritos_wgs84$NOMBRE
-)
-
-leaflet(distritos_wgs84) %>%
-  addTiles() %>%
-  addPolygons(
-    fillColor = ~pal(NOMBRE),
-    weight = 2,
-    opacity = 1,
-    color = "white",
-    dashArray = "3",
-    fillOpacity = 0.7,
-    popup = ~paste("Distrito: ", NOMBRE)
-  ) %>%
-  addLegend(
-    position = "bottomright",
-    pal = pal,
-    values = ~NOMBRE,
-    title = "Distritos de Madrid",
-    opacity = 1
+# 3. Mapa combinado: base + mapa de calor
+ggplot() +
+  # Mapa base de distritos
+  geom_sf(data = madrid_sf, fill = NA, color = "gray40", size = 0.3) +
+  
+  # Mapa de calor
+  stat_density_2d(
+    data = accidents_clean_data_filtered,
+    aes(x = coordenada_x_utm, y = coordenada_y_utm, fill = ..level..),
+    geom = "polygon",
+    alpha = 0.6
+  ) +
+  
+  # Paleta de color
+  scale_fill_gradient(low = "yellow", high = "red", name = "Densidad") +
+  
+  # Títulos y etiquetas
+  labs(
+    title = "Mapa de calor de accidentes en Madrid",
+    subtitle = "Superpuesto sobre distritos (2019-2023)",
+    x = "Coordenada X (UTM)",
+    y = "Coordenada Y (UTM)",
+    caption = "Fuente: Datos Abiertos Madrid"
+  ) +
+  
+  # Tema limpio y mapa ajustado
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "right"
   )
 
 
-# Mapa final con distritos + accidentes
-leaflet() %>%
-  addTiles() %>%
-  addPolygons(data = distritos_wgs84,
-              fillColor = ~pal(NOMBRE),
-              weight = 2,
-              opacity = 1,
-              color = "white",
-              dashArray = "3",
-              fillOpacity = 0.7,
-              popup = ~paste("Distrito: ", NOMBRE)) %>%
-  addCircleMarkers(data = accidentes_sf,
-                   radius = 3,
-                   color = "red",
-                   fillOpacity = 0.7,
-                   popup = ~paste("Tipo accidente: ", tipo_accidente,
-                                  "<br>Distrito: ", distrito,
-                                  "<br>Clima: ", estado_meteorol_gico,
-                                  "<br>Fecha: ", time)) %>%
-  addLegend(position = "bottomright",
-            pal = pal,
-            values = distritos_wgs84$NOMBRE,
-            title = "Distritos de Madrid",
-            opacity = 1)
 
+# 1. Leer shapefile de distritos
+# ya se hizo anteriormente
 
+# 2. Normalizar nombres de distrito para evitar problemas de match
+madrid_sf$NOMBRE <- toupper(trimws(madrid_sf$NOMBRE))
+accidents_clean_data_filtered$distrito <- toupper(trimws(accidents_clean_data_filtered$distrito))
 
-#Mapa de calor 
+# 3. Calcular centroides de cada distrito
+centroides_sf <- st_point_on_surface(madrid_sf)
+coords <- st_coordinates(centroides_sf)
 
-ggplot(accidents_clean_data_filtered, aes(x = coordenada_x_utm, y = coordenada_y_utm)) +
-  stat_density_2d(aes(fill = ..level..), geom = "polygon", alpha = 0.5) +
-  scale_fill_gradient(low = "yellow", high = "red") +
-  labs(title = "Mapa de calor de accidentes en Madrid",
-       x = "Coordenada X", y = "Coordenada Y") +
-  theme_minimal()
+# 4. Contar accidentes por distrito
+accidentes_distrito <- accidents_clean_data_filtered %>%
+  count(distrito, name = "n_accidentes")
+
+# 5. Preparar datos para el mapa
+datos_mapa <- data.frame(
+  distrito = madrid_sf$NOMBRE,
+  x = coords[,1],
+  y = coords[,2]
+) %>%
+  left_join(accidentes_distrito, by = c("distrito" = "distrito")) %>%
+  mutate(n_accidentes = ifelse(is.na(n_accidentes), 0, n_accidentes))  # reemplaza NA por 0
+
+# 6. Crear mapa con burbujas proporcionales y color
+ggplot() +
+  # Mapa base de distritos
+  geom_sf(data = madrid_sf, fill = "gray95", color = "gray50", size = 0.3) +
+  
+  # Burbujas proporcionales al número de accidentes
+  geom_point(data = datos_mapa,
+             aes(x = x, y = y, size = n_accidentes, color = n_accidentes),
+             alpha = 0.7) +
+  
+  # Escala de color (amarillo → rojo) y tamaño de burbuja
+  scale_color_gradient(low = "green", high = "#de2d27", name = "Accidentes") +
+  scale_size_continuous(range = c(3, 20), name = "Accidentes", labels = scales::comma) +
+  
+  # Etiquetas de distrito
+  geom_text(data = datos_mapa,
+            aes(x = x, y = y, label = distrito),
+            size = 2.5, color = "black", vjust = 1.2) +
+  
+  # Títulos y etiquetas
+  labs(title = "Cantidad de accidentes por distrito",
+       subtitle = "Madrid 2019–2023",
+       caption = "Fuente: Datos Abiertos Madrid") +
+  
+  # Tema limpio
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "right"
+  )
 
 
 
@@ -487,3 +570,26 @@ corrplot(cor_matrix, method = "color")
 3️⃣# Análisis bivariante (relaciones entre clima y accidentes)
 4️⃣# Análisis temporal y espacial
 5️⃣# Conclusiones y visualizaciones clave
+
+
+
+#¿Cuándo hacer clustering?
+ # SÍ, deberías hacer clustering para identificar perfiles de accidentes similares.
+#Paso 3.1: Clustering de zonas geográficas
+
+
+# Preparar datos (solo coordenadas)
+datos_geo <- accidents_clean_data_filtered[, c("coordenada_x_utm", "coordenada_y_utm")]
+
+# K-means con k=5 (5 zonas)
+set.seed(123)
+km_result <- kmeans(datos_geo, centers = 5, nstart = 25)
+
+# Añadir cluster al dataset
+accidents_clean_data_filtered$cluster_zona <- as.factor(km_result$cluster)
+
+# Visualizar
+fviz_cluster(km_result, data = datos_geo,
+             palette = "jco",
+             ggtheme = theme_minimal(),
+             main = "Clustering de zonas con accidentes")

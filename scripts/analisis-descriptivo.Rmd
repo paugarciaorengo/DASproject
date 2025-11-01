@@ -1,0 +1,642 @@
+---
+title: "Análisis de Accidentes de Tráfico en Madrid (2019-2023)"
+author: "Tu Nombre"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: cosmo
+    highlight: tango
+    number_sections: true
+  pdf_document:
+    toc: true
+    number_sections: true
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  fig.align = 'center'
+)
+```
+
+# Configuración del Entorno
+
+## Instalación de Paquetes
+```{r instalacion, eval=FALSE}
+# Ejecutar solo si los paquetes no están instalados
+install.packages("corrplot")
+install.packages("sf")
+install.packages("leaflet")
+install.packages(c("sf", "dplyr", "ggplot2", "scales"))
+```
+
+## Carga de Librerías
+```{r librerias}
+# Manipulación y visualización de datos
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(stringr)
+library(tidyr)
+library(scales)
+
+# Análisis espacial
+library(sf)
+library(leaflet)
+
+# Análisis estadístico
+library(corrplot)
+library(cluster)
+library(factoextra)
+```
+
+# Carga y Preparación de Datos
+
+## Importación del Dataset
+```{r carga-datos}
+# Cargar el archivo CSV con datos de accidentes y meteorología
+accidents_clean_data <- read.csv("../data/processed/accidentes_madrid_con_weather.csv", 
+                                 header = TRUE, 
+                                 sep = ",")
+```
+
+## Exploración Inicial del Dataset
+```{r exploracion-inicial}
+# Visualizar nombres de columnas
+names(accidents_clean_data)
+
+# Estructura del dataset
+str(accidents_clean_data)
+
+# Valores únicos en la variable lesividad
+unique(accidents_clean_data$lesividad)
+```
+
+## Limpieza de Datos
+
+### Normalización de Valores Faltantes
+```{r limpieza-na}
+# Estandarizar valores faltantes y limpiar espacios en blanco
+accidents_clean_data <- accidents_clean_data %>%
+  # Eliminar espacios en blanco en columnas de texto
+  mutate(across(where(is.character), ~str_trim(.))) %>%
+  
+  # Reemplazar valores problemáticos por NA
+  mutate(across(where(is.character),
+                ~case_when(
+                  . %in% c("", "NA", "N/A", "No se registró", "No se registro",
+                           "null", "NULL", "Sin dato", "Desconocido") ~ NA_character_,
+                  TRUE ~ .
+                )))
+```
+
+### Análisis de Valores Faltantes
+```{r analisis-na}
+# Calcular porcentaje de valores faltantes por columna
+missing_summary <- accidents_clean_data %>%
+  summarise(across(everything(), ~mean(is.na(.)) * 100)) %>%
+  pivot_longer(cols = everything(), names_to = "columna", values_to = "porcentaje_na") %>%
+  arrange(desc(porcentaje_na))
+
+# Mostrar resumen de valores faltantes
+print(missing_summary)
+
+# Contar valores únicos en columnas categóricas
+sapply(accidents_clean_data[, sapply(accidents_clean_data, is.character)], 
+       function(x) length(unique(x)))
+```
+
+## Ingeniería de Características
+
+### Variables Temporales
+```{r variables-temporales}
+# Extraer componentes de fecha y tiempo
+accidents_clean_data$fecha <- as.Date(accidents_clean_data$time)
+accidents_clean_data$anio <- year(accidents_clean_data$fecha)
+accidents_clean_data$hora <- hour(accidents_clean_data$time)
+accidents_clean_data$dia_semana <- wday(accidents_clean_data$time, label = TRUE, abbr = FALSE)
+accidents_clean_data$mes <- month(accidents_clean_data$time, label = TRUE)
+
+# Crear variable de estación del año
+accidents_clean_data$estacion <- case_when(
+  accidents_clean_data$mes %in% c("diciembre", "enero", "febrero") ~ "Invierno",
+  accidents_clean_data$mes %in% c("marzo", "abril", "mayo") ~ "Primavera",
+  accidents_clean_data$mes %in% c("junio", "julio", "agosto") ~ "Verano",
+  accidents_clean_data$mes %in% c("septiembre", "octubre", "noviembre") ~ "Otoño"
+)
+```
+
+### Franjas Horarias y Períodos
+```{r franja-horaria}
+# Clasificar accidentes por franja horaria
+accidents_clean_data$franja_horaria <- case_when(
+  accidents_clean_data$hora >= 6 & accidents_clean_data$hora < 12 ~ "Mañana",
+  accidents_clean_data$hora >= 12 & accidents_clean_data$hora < 18 ~ "Tarde",
+  accidents_clean_data$hora >= 18 & accidents_clean_data$hora < 24 ~ "Noche",
+  TRUE ~ "Madrugada"
+)
+
+# Clasificar fin de semana vs entre semana
+accidents_clean_data$es_fin_de_semana <- ifelse(
+  accidents_clean_data$dia_semana %in% c("sábado", "domingo"), "Sí", "No"
+)
+```
+
+### Variables Meteorológicas Derivadas
+```{r variables-meteorologicas}
+# Categorizar temperatura en rangos
+accidents_clean_data$categoria_temp <- case_when(
+  accidents_clean_data$wx_temperature < 5 ~ "Frío (< 5°C)",
+  accidents_clean_data$wx_temperature >= 5 & accidents_clean_data$wx_temperature < 15 ~ "Templado (5-15°C)",
+  accidents_clean_data$wx_temperature >= 15 & accidents_clean_data$wx_temperature < 25 ~ "Cálido (15-25°C)",
+  accidents_clean_data$wx_temperature >= 25 ~ "Caluroso (> 25°C)"
+)
+
+# Crear indicador binario de precipitación
+accidents_clean_data$hubo_lluvia <- ifelse(accidents_clean_data$wx_precipitation > 0, "Sí", "No")
+```
+
+### Clasificación de Gravedad de Lesiones
+```{r gravedad-binaria}
+# Crear variable de gravedad simplificada
+accidents_clean_data <- accidents_clean_data %>%
+  mutate(gravedad_binaria = case_when(
+    # Casos leves: atención en el lugar, sin asistencia o ambulatoria
+    grepl("sólo en el lugar|Sin asistencia|ambulatoria", lesividad, ignore.case = TRUE) ~ "Leve",
+    
+    # Casos graves: ingreso hospitalario, urgencias, fallecimientos
+    grepl("Ingreso|urgencias|centro de salud|mutua|Fallecido", lesividad, ignore.case = TRUE) ~ "Grave",
+    
+    # Casos sin información
+    lesividad == "Se desconoce" | is.na(lesividad) ~ "Desconocido",
+    
+    # Otros casos no clasificados
+    TRUE ~ "Otro"
+  ))
+```
+
+## Resumen del Dataset Procesado
+```{r resumen-final}
+# Estructura general del dataset
+str(accidents_clean_data)
+
+# Estadísticas descriptivas
+summary(accidents_clean_data)
+
+# Conteo de valores faltantes por variable
+sapply(accidents_clean_data, function(x) sum(is.na(x)))
+
+# Primeras filas del dataset
+head(accidents_clean_data)
+
+# Listado de todas las columnas
+colnames(accidents_clean_data)
+```
+
+# Análisis General del Conjunto de Datos
+
+## Distribución por Tipo de Accidente
+```{r tipo-accidente}
+accidents_clean_data %>%
+  filter(!is.na(tipo_accidente)) %>%
+  count(tipo_accidente) %>%
+  mutate(tipo_accidente = reorder(tipo_accidente, n)) %>%
+  ggplot(aes(x = tipo_accidente, y = n)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = n), hjust = -0.1) +
+  coord_flip() +
+  labs(
+    title = "Distribución de tipos de accidente en Madrid (2019–2023)",
+    x = "Tipo de accidente",
+    y = "Número de accidentes"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 9)
+  )
+```
+
+## Distribución por Distrito
+```{r accidentes-distrito}
+# Calcular total de accidentes por distrito
+accidentes_por_distrito <- accidents_clean_data %>%
+  filter(!is.na(distrito)) %>%
+  group_by(distrito) %>%
+  summarise(total_accidentes = n()) %>%
+  arrange(desc(total_accidentes))
+
+# Visualización
+ggplot(accidentes_por_distrito, 
+       aes(x = reorder(distrito, total_accidentes), y = total_accidentes, fill = distrito)) +
+  geom_col() +
+  geom_text(aes(label = total_accidentes), vjust = 0.5, hjust = -0.1) +
+  coord_flip() +
+  labs(
+    title = "Accidentes de tráfico por distrito (Madrid 2019–2023)",
+    x = "Distrito",
+    y = "Número de accidentes"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## Distribución por Tipo de Vehículo
+```{r tipo-vehiculo}
+# Calcular accidentes por tipo de vehículo
+accidentes_por_tipo_vehiculo <- accidents_clean_data %>%
+  filter(!is.na(tipo_vehiculo)) %>%
+  group_by(tipo_vehiculo) %>%
+  summarise(total_accidentes = n()) %>%
+  arrange(desc(total_accidentes))
+
+# Visualización
+ggplot(accidentes_por_tipo_vehiculo, 
+       aes(x = reorder(tipo_vehiculo, total_accidentes), y = total_accidentes)) +
+  geom_col(fill = "tomato") +
+  coord_flip() +
+  labs(
+    title = "Accidentes de tráfico por tipo de vehículo (Madrid 2019–2023)",
+    x = "Tipo de vehículo",
+    y = "Número de accidentes"
+  ) +
+  theme_minimal()
+```
+
+## Gravedad según Tipo de Accidente
+```{r gravedad-tipo-accidente}
+# Filtrar datos sin NA en tipo de accidente
+accidents_clean_data_sin_na <- accidents_clean_data %>%
+  filter(!is.na(tipo_accidente))
+
+# Visualización de proporción de gravedad por tipo de accidente
+ggplot(accidents_clean_data_sin_na, aes(x = tipo_accidente, fill = gravedad_binaria)) +
+  geom_bar(position = "fill") +
+  coord_flip() +
+  labs(
+    title = "Gravedad según tipo de accidente",
+    x = "Tipo de accidente", 
+    y = "Proporción"
+  ) +
+  theme_minimal()
+```
+
+## Distribución Temporal Básica
+
+### Accidentes por Día de la Semana
+```{r dia-semana}
+ggplot(accidents_clean_data, aes(x = dia_semana)) +
+  geom_bar(fill = "steelblue") +
+  labs(
+    title = "Accidentes por día de la semana",
+    x = "Día", 
+    y = "Número de accidentes"
+  ) +
+  theme_minimal()
+```
+
+### Accidentes por Mes
+```{r accidentes-mes}
+ggplot(accidents_clean_data, aes(x = mes)) +
+  geom_bar(fill = "forestgreen") +
+  labs(
+    title = "Accidentes por mes",
+    x = "Mes", 
+    y = "Número de accidentes"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Análisis Meteorológico
+
+## Accidentes por Condición Meteorológica (Totales)
+```{r accidentes-clima-total}
+# Contar accidentes por estado meteorológico
+accidentes_clima <- accidents_clean_data %>%
+  filter(!is.na(estado_meteorol_gico)) %>%
+  count(estado_meteorol_gico) %>%
+  arrange(desc(n))
+
+# Visualización
+ggplot(accidentes_clima, aes(x = reorder(estado_meteorol_gico, n), y = n)) +
+  geom_col(fill = "skyblue") +
+  geom_text(aes(label = n), hjust = -0.1) +
+  coord_flip() +
+  labs(
+    title = "Accidentes según estado meteorológico (Madrid 2019–2023)",
+    x = "Estado meteorológico",
+    y = "Número de accidentes"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+## Media de Accidentes Diarios por Condición Meteorológica
+```{r accidentes-clima-media}
+# Calcular media de accidentes por día según condición meteorológica
+accidentes_clima <- accidents_clean_data %>%
+  filter(!is.na(estado_meteorol_gico)) %>%
+  mutate(fecha = as.Date(time)) %>%
+  group_by(estado_meteorol_gico, fecha) %>%
+  summarise(accidentes_dia = n(), .groups = 'drop') %>%
+  group_by(estado_meteorol_gico) %>%
+  summarise(media = mean(accidentes_dia)) %>%
+  arrange(desc(media))
+
+# Visualización
+ggplot(accidentes_clima, aes(x = reorder(estado_meteorol_gico, media), y = media)) +
+  geom_col(fill = "grey") +
+  geom_text(aes(label = round(media, 1)), hjust = -0.1) +
+  coord_flip() +
+  labs(
+    title = "Media de accidentes por día según estado meteorológico (Madrid 2019–2023)",
+    x = "Estado meteorológico",
+    y = "Media de accidentes por día"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+## Accidentes según Categoría de Temperatura
+```{r accidentes-temperatura}
+# Filtrar datos con temperatura categorizada
+accidents_clean_data_temp <- accidents_clean_data %>%
+  filter(!is.na(categoria_temp))
+
+# Visualización
+ggplot(accidents_clean_data_temp, aes(x = categoria_temp)) +
+  geom_bar(fill = "orange") +
+  labs(
+    title = "Accidentes según categoría de temperatura",
+    x = "Temperatura", 
+    y = "Número de accidentes"
+  ) +
+  theme_minimal()
+```
+
+## Accidentes con y sin Lluvia
+```{r accidentes-lluvia}
+# Filtrar datos con información de lluvia
+accidents_clean_data_lluvia <- accidents_clean_data %>%
+  filter(!is.na(hubo_lluvia))
+
+# Visualización
+ggplot(accidents_clean_data_lluvia, aes(x = hubo_lluvia)) +
+  geom_bar(fill = "dodgerblue") +
+  labs(
+    title = "Accidentes según presencia de lluvia",
+    x = "¿Llovió?", 
+    y = "Número de accidentes"
+  ) +
+  theme_minimal()
+```
+
+# Análisis Temporal
+
+## Distribución por Año
+```{r accidentes-anio}
+# Calcular accidentes por año
+accidentes_por_anio <- accidents_clean_data %>%
+  group_by(anio) %>%
+  summarise(total_accidentes = n())
+
+# Visualización
+ggplot(accidentes_por_anio, aes(x = factor(anio), y = total_accidentes)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = total_accidentes), vjust = -0.5, size = 4) +
+  labs(
+    title = "Número de accidentes por año en Madrid (2019–2023)",
+    x = "Año",
+    y = "Número de accidentes"
+  ) +
+  theme_minimal()
+```
+
+## Distribución por Hora del Día
+```{r distribucion-hora}
+ggplot(accidents_clean_data, aes(x = hora)) +
+  geom_bar(fill = "#DE2D27") +
+  labs(
+    title = "Distribución de accidentes por hora del día",
+    x = "Hora", 
+    y = "Número de accidentes"
+  ) +
+  theme_minimal()
+```
+
+# Análisis Espacial
+
+## Preparación de Datos Geoespaciales
+```{r preparacion-espacial}
+# Filtrar y normalizar coordenadas UTM
+accidents_clean_data_filtered <- accidents_clean_data %>%
+  filter(!is.na(coordenada_x_utm) & !is.na(coordenada_y_utm)) %>%
+  mutate(
+    coordenada_x_utm = as.numeric(coordenada_x_utm) / 1000,
+    coordenada_y_utm = as.numeric(coordenada_y_utm) / 1000
+  ) %>%
+  # Filtrar coordenadas válidas para el área metropolitana de Madrid (UTM zona 30N)
+  filter(
+    coordenada_x_utm >= 430000 & coordenada_x_utm <= 450000,
+    coordenada_y_utm >= 4465000 & coordenada_y_utm <= 4485000
+  )
+
+# Convertir a objeto espacial SF con proyección UTM
+accidentes_sf <- st_as_sf(accidents_clean_data_filtered,
+                          coords = c("coordenada_x_utm", "coordenada_y_utm"),
+                          crs = 25830)
+
+# Transformar a sistema WGS84 (latitud/longitud)
+accidentes_sf <- st_transform(accidentes_sf, crs = 4326)
+```
+
+## Mapa de Calor de Densidad de Accidentes
+```{r mapa-calor}
+# Cargar shapefile de los distritos de Madrid
+madrid_sf <- st_read("../data/raw/distritos/DISTRITOS.shp")
+
+# Crear mapa de calor superpuesto sobre límites de distritos
+ggplot() +
+  # Capa base: límites administrativos de distritos
+  geom_sf(data = madrid_sf, fill = NA, color = "gray40", size = 0.3) +
+  
+  # Capa de densidad: mapa de calor de accidentes
+  stat_density_2d(
+    data = accidents_clean_data_filtered,
+    aes(x = coordenada_x_utm, y = coordenada_y_utm, fill = ..level..),
+    geom = "polygon",
+    alpha = 0.6
+  ) +
+  
+  # Escala de color de amarillo (baja densidad) a rojo (alta densidad)
+  scale_fill_gradient(low = "yellow", high = "red", name = "Densidad") +
+  
+  # Títulos y etiquetas
+  labs(
+    title = "Mapa de calor de accidentes en Madrid",
+    subtitle = "Superpuesto sobre distritos (2019-2023)",
+    x = "Coordenada X (UTM)",
+    y = "Coordenada Y (UTM)",
+    caption = "Fuente: Datos Abiertos Madrid"
+  ) +
+  
+  # Estilo visual
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "right"
+  )
+```
+
+## Mapa de Burbujas por Distrito
+```{r mapa-burbujas}
+# Normalizar nombres de distrito para evitar problemas de coincidencia
+madrid_sf$NOMBRE <- toupper(trimws(madrid_sf$NOMBRE))
+accidents_clean_data_filtered$distrito <- toupper(trimws(accidents_clean_data_filtered$distrito))
+
+# Calcular centroides geométricos de cada distrito
+centroides_sf <- st_point_on_surface(madrid_sf)
+coords <- st_coordinates(centroides_sf)
+
+# Contar accidentes por distrito
+accidentes_distrito <- accidents_clean_data_filtered %>%
+  count(distrito, name = "n_accidentes")
+
+# Preparar datos para visualización con coordenadas de centroides
+datos_mapa <- data.frame(
+  distrito = madrid_sf$NOMBRE,
+  x = coords[,1],
+  y = coords[,2]
+) %>%
+  left_join(accidentes_distrito, by = c("distrito" = "distrito")) %>%
+  mutate(n_accidentes = ifelse(is.na(n_accidentes), 0, n_accidentes))
+
+# Crear mapa con burbujas proporcionales al número de accidentes
+ggplot() +
+  # Capa base: polígonos de distritos
+  geom_sf(data = madrid_sf, fill = "gray95", color = "gray50", size = 0.3) +
+  
+  # Burbujas: tamaño proporcional al número de accidentes
+  geom_point(data = datos_mapa,
+             aes(x = x, y = y, size = n_accidentes, color = n_accidentes),
+             alpha = 0.7) +
+  
+  # Escalas de color y tamaño
+  scale_color_gradient(low = "green", high = "#de2d27", name = "Accidentes") +
+  scale_size_continuous(range = c(3, 20), name = "Accidentes", labels = comma) +
+  
+  # Etiquetas de nombre de distrito
+  geom_text(data = datos_mapa,
+            aes(x = x, y = y, label = distrito),
+            size = 2.5, color = "black", vjust = 1.2) +
+  
+  # Títulos y metadatos
+  labs(
+    title = "Cantidad de accidentes por distrito",
+    subtitle = "Madrid 2019–2023",
+    caption = "Fuente: Datos Abiertos Madrid"
+  ) +
+  
+  # Estilo visual limpio
+  theme_void() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, size = 10),
+    legend.position = "right"
+  )
+```
+
+# Análisis de Factores Humanos
+
+## Distribución por Rango de Edad y Sexo
+```{r edad-sexo}
+ggplot(accidents_clean_data, aes(x = rango_edad, fill = sexo)) + 
+  geom_bar(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "Distribución de accidentes por rango de edad y sexo",
+    x = "Rango de edad",
+    y = "Número de accidentes",
+    fill = "Sexo"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    axis.text.y = element_text(size = 10)
+  )
+```
+
+# Análisis Multivariado
+
+## Matriz de Correlaciones entre Variables Meteorológicas
+```{r correlaciones}
+# Seleccionar únicamente variables meteorológicas numéricas
+numericas <- accidents_clean_data[, c("wx_temperature", "wx_wind_speed", "wx_precipitation")]
+
+# Calcular matriz de correlación
+cor_matrix <- cor(numericas, use = "complete.obs")
+
+# Visualizar matriz de correlaciones
+corrplot(cor_matrix, method = "color")
+```
+
+# Análisis Avanzado: Clustering Geográfico
+
+## Identificación de Zonas de Alta Concentración de Accidentes
+```{r clustering-geografico}
+# Preparar dataset con solo coordenadas espaciales
+datos_geo <- accidents_clean_data_filtered[, c("coordenada_x_utm", "coordenada_y_utm")]
+
+# Aplicar algoritmo K-means con 5 clusters
+set.seed(123)
+km_result <- kmeans(datos_geo, centers = 5, nstart = 25)
+
+# Añadir identificador de cluster al dataset
+accidents_clean_data_filtered$cluster_zona <- as.factor(km_result$cluster)
+
+# Visualizar clusters identificados
+fviz_cluster(km_result, data = datos_geo,
+             palette = "jco",
+             ggtheme = theme_minimal(),
+             main = "Clustering de zonas con accidentes")
+```
+
+# Conclusiones
+
+## Resumen de Hallazgos Clave
+
+- **Análisis temporal:** Se identificaron patrones claros en la distribución de accidentes por hora, día de la semana y mes.
+- **Factores meteorológicos:** Las condiciones climáticas muestran relación con la frecuencia de accidentes.
+- **Análisis espacial:** Ciertos distritos presentan mayor concentración de accidentes.
+- **Clustering geográfico:** Se identificaron 5 zonas principales con características similares de siniestralidad.
+
+## Ruta Metodológica Seguida
+
+1. **Carga y limpieza de datos:** Tratamiento de valores faltantes y normalización.
+2. **Análisis univariante:** Exploración de cada variable por separado.
+3. **Análisis bivariante:** Relaciones entre clima, tiempo y accidentes.
+4. **Análisis temporal y espacial:** Identificación de patrones espacio-temporales.
+5. **Análisis multivariado:** Correlaciones y clustering.
+
+---
+
+**Información del Análisis**
+
+- **Fuente de datos:** Portal de Datos Abiertos del Ayuntamiento de Madrid
+- **Período analizado:** 2019-2023
+- **Herramientas:** R `r getRversion()`
+- **Fecha de generación del informe:** `r Sys.Date()`
