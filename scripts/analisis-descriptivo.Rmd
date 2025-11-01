@@ -3,16 +3,19 @@ title: "Análisis de Accidentes de Tráfico en Madrid (2019-2023)"
 author: "Pau Garcia Orengo, Vanessa Machordom Torres, Ditmar Estrada Bernuy"
 date: "`r Sys.Date()`"
 output:
-  html_document:
-    toc: true
-    toc_float: true
-    toc_depth: 3
-    theme: cosmo
-    highlight: tango
-    number_sections: true
   pdf_document:
     toc: true
+    toc_depth: 3
     number_sections: true
+    fig_width: 7
+    fig_height: 5
+    df_print: kable
+    latex_engine: xelatex
+    keep_tex: false
+geometry: margin=0.75in
+fontsize: 10pt
+urlcolor: blue
+linkcolor: blue
 ---
 
 ```{r setup, include=FALSE}
@@ -20,10 +23,18 @@ knitr::opts_chunk$set(
   echo = TRUE,
   warning = FALSE,
   message = FALSE,
-  fig.width = 10,
-  fig.height = 6,
-  fig.align = 'center'
+  fig.align = 'center',
+  out.width = "90%",
+  fig.width = 7,
+  fig.height = 5,
+  tidy = FALSE  # Cambiado a FALSE para usar listings en su lugar
 )
+
+# Configuración global para tablas kable
+options(knitr.kable.NA = '')
+
+# Configuración para ancho de salida de texto
+options(width = 75)
 ```
 
 # Configuración del Entorno
@@ -57,6 +68,9 @@ library(leaflet)
 library(corrplot)
 library(cluster)
 library(factoextra)
+
+library(knitr)
+library(kableExtra)
 ```
 
 # Carga y Preparación de Datos
@@ -73,14 +87,142 @@ accidents_clean_data <- read.csv("../data/processed/accidentes_madrid_con_weathe
 ## Exploración Inicial del Dataset
 
 ```{r exploracion-inicial}
-# Visualizar nombres de columnas
-names(accidents_clean_data)
+# Dimensiones del dataset
+cat("### RESUMEN GENERAL DEL DATASET ###\n\n")
+cat(sprintf("📊 Dimensiones: %s observaciones × %s variables\n", 
+            format(nrow(accidents_clean_data), big.mark = ","),
+            ncol(accidents_clean_data)))
+cat(sprintf("📅 Período: %s a %s\n", 
+            min(as.Date(accidents_clean_data$time)), 
+            max(as.Date(accidents_clean_data$time))))
+```
 
-# Estructura del dataset
-str(accidents_clean_data)
+### Estructura de Variables
 
-# Valores únicos en la variable lesividad
-unique(accidents_clean_data$lesividad)
+```{r estructura-variables}
+# Crear tabla resumen de estructura de variables
+estructura_df <- data.frame(
+  Variable = names(accidents_clean_data),
+  Tipo = sapply(accidents_clean_data, function(x) class(x)[1]),
+  NAs = sapply(accidents_clean_data, function(x) sum(is.na(x))),
+  Porcentaje_NA = sapply(accidents_clean_data, 
+                         function(x) round(mean(is.na(x)) * 100, 1)),
+  Valores_Unicos = sapply(accidents_clean_data, 
+                          function(x) length(unique(x)))
+)
+
+# Ordenar por porcentaje de NAs descendente
+estructura_df <- estructura_df %>%
+  arrange(desc(Porcentaje_NA))
+
+# Mostrar tabla con formato profesional
+estructura_df %>%
+  kable(format = "latex", 
+        booktabs = TRUE,
+        caption = "Estructura y características de las variables del dataset",
+        col.names = c("Variable", "Tipo", "NAs", "Pct NA", "Valores únicos"),
+        align = c("l", "c", "r", "r", "r")) %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"),
+                font_size = 8,
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE)
+```
+
+### Resumen Estadístico de Variables Numéricas
+
+```{r resumen-numericas}
+# Seleccionar solo variables numéricas
+vars_numericas <- accidents_clean_data %>%
+  select(where(is.numeric))
+
+# Crear resumen estadístico
+if(ncol(vars_numericas) > 0) {
+  resumen_num <- data.frame(
+    Variable = names(vars_numericas),
+    Media = sapply(vars_numericas, mean, na.rm = TRUE),
+    Mediana = sapply(vars_numericas, median, na.rm = TRUE),
+    Desv_Est = sapply(vars_numericas, sd, na.rm = TRUE),
+    Minimo = sapply(vars_numericas, min, na.rm = TRUE),
+    Maximo = sapply(vars_numericas, max, na.rm = TRUE)
+  )
+  
+  resumen_num %>%
+    mutate(across(where(is.numeric), ~round(., 2))) %>%
+    kable(format = "latex", 
+          booktabs = TRUE,
+          caption = "Estadísticas descriptivas de variables numéricas",
+          col.names = c("Variable", "Media", "Mediana", "Desv. Est.", 
+                       "Mínimo", "Máximo"),
+          align = c("l", rep("r", 5))) %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"),
+                  font_size = 9,
+                  full_width = FALSE) %>%
+    row_spec(0, bold = TRUE)
+}
+```
+
+### Variables Categóricas Principales
+
+```{r resumen-categoricas}
+# Identificar variables categóricas con pocos valores únicos
+vars_categoricas <- accidents_clean_data %>%
+  select(where(is.character)) %>%
+  select(where(~length(unique(.)) <= 20))
+
+# Crear resumen de frecuencias para variables categóricas clave
+if(ncol(vars_categoricas) > 0) {
+  cat("\n**Variables categóricas identificadas:**\n\n")
+  cat(paste("-", names(vars_categoricas), collapse = "\n"))
+}
+```
+
+### Distribución de la Variable Objetivo: Lesividad
+
+```{r lesividad-detalle}
+# Análisis detallado de lesividad
+lesividad_freq <- accidents_clean_data %>%
+  filter(!is.na(lesividad)) %>%
+  count(lesividad) %>%
+  mutate(Porcentaje = round(n / sum(n) * 100, 2)) %>%
+  arrange(desc(n))
+
+lesividad_freq %>%
+  kable(format = "latex", 
+        booktabs = TRUE,
+        caption = "Distribución de tipos de lesividad en accidentes",
+        col.names = c("Tipo de Lesividad", "Frecuencia", "Porcentaje"),
+        align = c("l", "r", "r")) %>%
+  kable_styling(latex_options = c("striped", "HOLD_position"),
+                font_size = 9,
+                full_width = FALSE) %>%
+  row_spec(0, bold = TRUE) %>%
+  column_spec(1, width = "8cm")
+```
+
+### Calidad de Datos: Variables con Datos Faltantes
+
+```{r missing-data-viz}
+# Resumen visual de datos faltantes
+missing_data <- estructura_df %>%
+  filter(Porcentaje_NA > 0) %>%
+  select(Variable, NAs, Porcentaje_NA) %>%
+  arrange(desc(Porcentaje_NA))
+
+if(nrow(missing_data) > 0) {
+  missing_data %>%
+    head(15) %>%
+    kable(format = "latex", 
+          booktabs = TRUE,
+          caption = "Top 15 variables con mayor proporción de datos faltantes",
+          col.names = c("Variable", "Cantidad NAs", "Pct Faltante"),
+          align = c("l", "r", "r")) %>%
+    kable_styling(latex_options = c("striped", "HOLD_position"),
+                  font_size = 9,
+                  full_width = FALSE) %>%
+    row_spec(0, bold = TRUE)
+} else {
+  cat("✅ No se encontraron datos faltantes en el dataset.\n")
+}
 ```
 
 ## Limpieza de Datos
@@ -111,12 +253,29 @@ missing_summary <- accidents_clean_data %>%
   pivot_longer(cols = everything(), names_to = "columna", values_to = "porcentaje_na") %>%
   arrange(desc(porcentaje_na))
 
-# Mostrar resumen de valores faltantes
-print(missing_summary)
+# Mostrar resumen de valores faltantes con formato ajustado
+missing_summary %>%
+  kable(format = "latex", booktabs = TRUE, 
+        digits = 2,
+        col.names = c("Columna", "% NA"),
+        caption = "Porcentaje de valores faltantes por columna") %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"),
+                font_size = 9,
+                full_width = FALSE)
 
 # Contar valores únicos en columnas categóricas
-sapply(accidents_clean_data[, sapply(accidents_clean_data, is.character)], 
-       function(x) length(unique(x)))
+valores_unicos <- sapply(accidents_clean_data[, sapply(accidents_clean_data, is.character)], 
+                         function(x) length(unique(x)))
+
+data.frame(
+  Columna = names(valores_unicos),
+  Valores_Unicos = valores_unicos
+) %>%
+  kable(format = "latex", booktabs = TRUE,
+        caption = "Valores únicos en columnas categóricas") %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"),
+                font_size = 9,
+                full_width = FALSE)
 ```
 
 ## Ingeniería de Características
@@ -162,14 +321,24 @@ accidents_clean_data$es_fin_de_semana <- ifelse(
 ```{r variables-meteorologicas}
 # Categorizar temperatura en rangos
 accidents_clean_data$categoria_temp <- case_when(
-  accidents_clean_data$wx_temperature < 5 ~ "Frío (< 5°C)",
-  accidents_clean_data$wx_temperature >= 5 & accidents_clean_data$wx_temperature < 15 ~ "Templado (5-15°C)",
-  accidents_clean_data$wx_temperature >= 15 & accidents_clean_data$wx_temperature < 25 ~ "Cálido (15-25°C)",
-  accidents_clean_data$wx_temperature >= 25 ~ "Caluroso (> 25°C)"
+  accidents_clean_data$wx_temperature < 5 ~ 
+    "Frío (< 5°C)",
+  accidents_clean_data$wx_temperature >= 5 & 
+    accidents_clean_data$wx_temperature < 15 ~ 
+    "Templado (5-15°C)",
+  accidents_clean_data$wx_temperature >= 15 & 
+    accidents_clean_data$wx_temperature < 25 ~ 
+    "Cálido (15-25°C)",
+  accidents_clean_data$wx_temperature >= 25 ~ 
+    "Caluroso (> 25°C)"
 )
 
 # Crear indicador binario de precipitación
-accidents_clean_data$hubo_lluvia <- ifelse(accidents_clean_data$wx_precipitation > 0, "Sí", "No")
+accidents_clean_data$hubo_lluvia <- ifelse(
+  accidents_clean_data$wx_precipitation > 0, 
+  "Sí", 
+  "No"
+)
 ```
 
 ### Clasificación de Gravedad de Lesiones
@@ -178,16 +347,21 @@ accidents_clean_data$hubo_lluvia <- ifelse(accidents_clean_data$wx_precipitation
 # Crear variable de gravedad simplificada
 accidents_clean_data <- accidents_clean_data %>%
   mutate(gravedad_binaria = case_when(
-    # Casos leves: atención en el lugar, sin asistencia o ambulatoria
-    grepl("sólo en el lugar|Sin asistencia|ambulatoria", lesividad, ignore.case = TRUE) ~ "Leve",
+    # Casos leves
+    grepl("sólo en el lugar|Sin asistencia|ambulatoria", 
+          lesividad, 
+          ignore.case = TRUE) ~ "Leve",
     
-    # Casos graves: ingreso hospitalario, urgencias, fallecimientos
-    grepl("Ingreso|urgencias|centro de salud|mutua|Fallecido", lesividad, ignore.case = TRUE) ~ "Grave",
+    # Casos graves
+    grepl("Ingreso|urgencias|centro de salud|mutua|Fallecido", 
+          lesividad, 
+          ignore.case = TRUE) ~ "Grave",
     
     # Casos sin información
-    lesividad == "Se desconoce" | is.na(lesividad) ~ "Desconocido",
+    lesividad == "Se desconoce" | 
+      is.na(lesividad) ~ "Desconocido",
     
-    # Otros casos no clasificados
+    # Otros casos
     TRUE ~ "Otro"
   ))
 ```
@@ -196,19 +370,38 @@ accidents_clean_data <- accidents_clean_data %>%
 
 ```{r resumen-final}
 # Estructura general del dataset
-str(accidents_clean_data)
+cat("Estructura del dataset procesado:\n")
+cat(sprintf("Dimensiones: %d filas x %d columnas\n", 
+            nrow(accidents_clean_data), 
+            ncol(accidents_clean_data)))
 
-# Estadísticas descriptivas
-summary(accidents_clean_data)
+# Estadísticas descriptivas - solo mostrar las primeras variables numéricas
+cat("\nEstadísticas descriptivas (primeras variables numéricas):\n")
+numericas_idx <- which(sapply(accidents_clean_data, is.numeric))[1:min(5, sum(sapply(accidents_clean_data, is.numeric)))]
+summary(accidents_clean_data[, numericas_idx])
 
 # Conteo de valores faltantes por variable
-sapply(accidents_clean_data, function(x) sum(is.na(x)))
+na_counts <- sapply(accidents_clean_data, function(x) sum(is.na(x)))
+data.frame(
+  Variable = names(na_counts),
+  NA_Count = na_counts
+) %>%
+  filter(NA_Count > 0) %>%
+  kable(format = "latex", booktabs = TRUE,
+        caption = "Conteo de valores faltantes",
+        col.names = c("Variable", "NAs")) %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"),
+                font_size = 8,
+                full_width = FALSE)
 
 # Primeras filas del dataset
-head(accidents_clean_data)
-
-# Listado de todas las columnas
-colnames(accidents_clean_data)
+head(accidents_clean_data, 5) %>%
+  select(1:6) %>%
+  kable(format = "latex", booktabs = TRUE,
+        caption = "Primeras filas del dataset (primeras 6 columnas)") %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"),
+                font_size = 7,
+                full_width = FALSE)
 ```
 
 # Análisis General del Conjunto de Datos
@@ -501,9 +694,15 @@ names(n_by)[2] <- "n_dias"
 stats <- merge(sum_by, n_by, by = "day", all = TRUE)
 stats$mean_acc <- stats$accidents / stats$n_dias
 
-# Mostrar estadísticas
-cat("Estadísticas por día de la semana:\n")
-print(stats)
+# Mostrar estadísticas con formato ajustado
+stats %>%
+  kable(format = "latex", booktabs = TRUE, 
+        digits = 2,
+        col.names = c("Día", "Total accidentes", "N° días", "Media"),
+        caption = "Estadísticas por día de la semana") %>%
+  kable_styling(latex_options = c("striped", "HOLD_position"),
+                font_size = 10,
+                full_width = FALSE)
 ```
 
 ```{r plot-dia-semana-media, fig.cap="Media de accidentes por día de la semana"}
@@ -556,9 +755,16 @@ hols <- if (length(hols_list)) do.call(rbind, hols_list) else data.frame(date = 
 hols_days <- unique(hols$date)
 
 # Mostrar festivos obtenidos
-cat("Total de días festivos identificados:", length(hols_days), "\n")
-cat("\nPrimeros festivos:\n")
-print(head(hols[, c("date", "localName")], 10))
+cat("Total de días festivos identificados:", length(hols_days), "\n\n")
+
+# Tabla con primeros festivos
+head(hols[, c("date", "localName")], 10) %>%
+  kable(format = "latex", booktabs = TRUE,
+        col.names = c("Fecha", "Nombre"),
+        caption = "Primeros días festivos identificados") %>%
+  kable_styling(latex_options = c("striped", "HOLD_position"),
+                font_size = 10,
+                full_width = FALSE)
 ```
 
 ## Clasificación de Días Festivos vs No Festivos
@@ -571,8 +777,15 @@ daily$holiday <- factor(
 )
 
 # Resumen de días festivos vs no festivos
-cat("\nDistribución de días en el período:\n")
-print(table(daily$holiday))
+tabla_festivos <- as.data.frame(table(daily$holiday))
+names(tabla_festivos) <- c("Tipo_dia", "Frecuencia")
+
+tabla_festivos %>%
+  kable(format = "latex", booktabs = TRUE,
+        caption = "Distribución de días en el período") %>%
+  kable_styling(latex_options = c("striped", "HOLD_position"),
+                font_size = 10,
+                full_width = FALSE)
 ```
 
 ## Comparativa: Festivo vs No Festivo por Día de la Semana
@@ -590,9 +803,15 @@ names(n_by)[names(n_by) == "fecha"] <- "n_dias"
 comp_mean <- merge(mean_by, n_by, by = c("day", "holiday"), all = TRUE)
 comp_mean <- comp_mean[order(comp_mean$day, comp_mean$holiday), ]
 
-# Mostrar tabla comparativa
-cat("\nMedia de accidentes por día de la semana y condición de festivo:\n")
-print(comp_mean)
+# Mostrar tabla comparativa con formato ajustado
+comp_mean %>%
+  kable(format = "latex", booktabs = TRUE, 
+        digits = 2,
+        col.names = c("Día", "Tipo", "Media acc.", "N° días"),
+        caption = "Media de accidentes por día de la semana y condición de festivo") %>%
+  kable_styling(latex_options = c("striped", "scale_down", "HOLD_position"),
+                font_size = 9,
+                full_width = FALSE)
 ```
 
 ```{r plot-festivo-dia-semana, fig.cap="Comparativa de accidentes: festivo vs no festivo por día de la semana"}
@@ -638,9 +857,15 @@ names(n_h)[2] <- "n_dias"
 # Combinar estadísticas
 mean_h <- merge(mean_h, n_h, by = "holiday", all = TRUE)
 
-# Mostrar estadísticas
-cat("\nEstadísticas generales festivo vs no festivo:\n")
-print(mean_h)
+# Mostrar estadísticas con formato ajustado
+mean_h %>%
+  kable(format = "latex", booktabs = TRUE, 
+        digits = 2,
+        col.names = c("Tipo día", "Media accidentes", "N° días"),
+        caption = "Estadísticas generales festivo vs no festivo") %>%
+  kable_styling(latex_options = c("striped", "HOLD_position"),
+                font_size = 10,
+                full_width = FALSE)
 ```
 
 ```{r plot-festivo-general, fig.cap="Comparativa general: media de accidentes en días festivos vs no festivos"}
